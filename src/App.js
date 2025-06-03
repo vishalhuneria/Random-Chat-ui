@@ -10,86 +10,34 @@ function App() {
   const [showCallingDialog, setShowCallingDialog] = useState(false);
   const [isDashboardDisabled, setIsDashboardDisabled] = useState(false);
   const [section, setSection] = useState("1");
+
   const [isVideoCallActive, setIsVideoCallActive] = useState(false);
   const [isChatCallActive, setIsChatCallActive] = useState(false);
-  const [isMicActive, setIsMicActive] = useState({
-    mic: true,
-    camera: true,
+  const [defaultContraints, setDefaultContraints] = useState({
     audio: true,
+    video: true,
   });
+  const [caller, setCaller] = useState("");
+  const [callee, setCallee] = useState("");
   const [webRTCSignaling, setWebRTCSignaling] = useState({
     OFFER: "OFFER",
     ANSWER: "ANSWER",
     ICE_CANDIDATE: "ICE_CANDIDATE",
   });
-  const sendDataUsingWebRTCSignaling = (data) => {
-    socket.emit("webRTC-signaling");
-  };
 
-  const videoRef = useRef(null);
-
+  const localVideoRef = useRef(null);
+  // videoRef;
   const [socket, setSocket] = useState(null);
   const [socketId, setSocketId] = useState("");
   const [userSocketId, setUserSocketId] = useState("");
-  // const [localStream, setLocalStream] = useState(null);
-  // const [remoteStream, setRemoteStream] = useState(null);
+  const [localStream, setLocalStream] = useState(null);
+  const [peerConnection, setPeerConnection] = useState(null);
+  const [remoteStream, setRemoteStream] = useState(null);
+  const remoteVideoRef = useRef(null);
+
   // const [screenSharingStream, setScreenSharingSream] = useState(null);
-  // const [allowConnectionFromStrangers, setAllowConnectionFromStrangers] =
-  //   useState(false);
+  // const [allowConnectionFromStrangers, setAllowConnectionFromStrangers] =   useState(false);
   // const [screenSharingActive, setScreenSharingActive] = useState(false);
-
-  // const acceptCallHnadler = () => {};
-  // const rejectCallHnadler = () => {};
-  const createPeerConnection = () => {
-    // Function to create a new RTCPeerConnection
-    const peerConnection = new RTCPeerConnection({
-      iceServers: [
-        {
-          urls: "stun:stun.l.google.com:19302",
-        },
-      ],
-    });
-    peerConnection.onicecandidate = (event) => {
-      if (event.candidate) {
-        // Send the ICE candidate to the remote peer
-        socket.emit("ice-candidate", {
-          candidate: event.candidate,
-          socketId: connectedUserDetails.callerSocketId,
-        });
-      }
-    };
-    peerConnection.onconnectionstatechange = (event) => {
-      if (peerConnection.connectionState === "connected") {
-        console.log("Peer connection established successfully.");
-      }
-    };
-    peerConnection.ontrack = (event) => {
-      // Handle the remote stream
-      const remoteVideo = document.getElementById("remote-video");
-      if (remoteVideo) {
-        remoteVideo.srcObject = event.streams[0];
-      }
-    };
-
-    if (connectedUserDetails.callType === "Video") {
-      const localStream = videoRef.current.srcObject;
-      for (const track of localStream.getTracks()) {
-        peerConnection.addTrack(track, localStream);
-      }
-    }
-    return peerConnection; // Return the created peer connection
-  };
-  const handleWebRTCOffer = async (data) => {
-    const offer = await peerConnection.createOffer();
-    await peerConnection.setLocalDescription(offer);
-    socket.emit("webRTC-signaling", {
-      type: webRTCSignaling.OFFER,
-      OFFER: OFFER,
-      socketId: connectedUserDetails.callerSocketId,
-    });
-  };
-
-  navigator.mediaDevices.getUserMedia({ audio: true, video: true });
 
   const handleCopyPersonalCode = () => {
     if (socketId) {
@@ -117,11 +65,12 @@ function App() {
     };
     // Emit an event to initiate a chat with the userSocketId
     socket.emit("pre-offer", data);
+    setConnectedUserDetails(data);
     setShowCallingDialog(true);
     setCallTypeDialog(data.callType);
     console.log("emitting to server for chat conncetion");
   };
-  const handlePersonalCodeVideoButton = () => {
+  const handlePersonalCodeVideoButton = async () => {
     if (!userSocketId) {
       alert("Please enter a valid socket ID.");
       return;
@@ -134,31 +83,170 @@ function App() {
       alert("Socket connection not established.");
       return;
     }
+
     const data = {
       callType: "Video",
       calleePersonalCode: userSocketId,
     };
-    // Emit an event to initiate a video call with the userSocketId
-    socket.emit("pre-offer", data);
+
+    console.log("data", data);
+
+    await socket.emit("pre-offer", data);
+    setConnectedUserDetails(data);
     setShowCallingDialog(true);
     setCallTypeDialog(data.callType);
-    console.log("emitting to server for video conncetion");
+
+    console.log(
+      "emitting for video caller, callee data ",
+      connectedUserDetails
+    );
   };
 
+  // const acceptCallHandler = async () => {
+  //   setShowIncomingCallDialog(false);
+  //   socket.emit("pre-offer-answer", {
+  //     preOfferAnswer: "ACCEPT",
+  //     callerSocketId: connectedUserDetails.callerSocketId,
+  //   });
+  //   if (connectedUserDetails.callType === "Video") {
+  //     getLocalPreview();
+  //   }
+  //   createPeerConnection();
+  //   setIsDashboardDisabled(true);
+  // };
   const acceptCallHandler = async () => {
     setShowIncomingCallDialog(false);
-    await createPeerConnection();
-    socket.emit("pre-offer-answer", {
+    console.log(
+      "accepted call , caller data ",
+      connectedUserDetails.callerSocketId
+    );
+    await socket.emit("pre-offer-answer", {
       preOfferAnswer: "ACCEPT",
       callerSocketId: connectedUserDetails.callerSocketId,
     });
+    if (connectedUserDetails.callType === "Video") {
+      await getLocalPreview();
+    }
+    const pc = createPeerConnection();
+    // You can now safely use `pc`
+    setIsDashboardDisabled(true);
   };
-  const rejectCallHandler = () => {
+
+  const rejectCallHandler = async () => {
     setShowIncomingCallDialog(false);
-    socket.emit("pre-offer-answer", {
+    await socket.emit("pre-offer-answer", {
       preOfferAnswer: "REJECT",
       callerSocketId: connectedUserDetails.callerSocketId,
     });
+  };
+
+  const getLocalPreview = () => {
+    navigator.mediaDevices
+      .getUserMedia(defaultContraints)
+      .then((stream) => {
+        // Set the video source to the stream
+        if (localVideoRef.current) {
+          localVideoRef.current.srcObject = stream;
+          setLocalStream(stream);
+          console.log("Local stream set successfully.");
+        }
+      })
+      .catch((err) => {
+        console.error("Error accessing media devices.", err);
+      });
+  };
+
+  // const createPeerConnection = () => {
+  //   const newPeerConnection = new RTCPeerConnection({
+  //     iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+  //   });
+
+  //   newPeerConnection.onicecandidate = (event) => {
+  //     console.log("geeting ice candidate form stun server");
+  //     if (event.candidate) {
+  //       // Send the ICE candidate to the remote peer
+  //     }
+  //   };
+  //   newPeerConnection.onconnectionstatechange = (event) => {
+  //     if (peerConnection.connectionState === "connected") {
+  //       console.log(
+  //         "Peer connection established successfully. with other peer"
+  //       );
+  //     }
+  //   };
+  //   // recieveing tracks from remote peer
+  //   setRemoteStream(new MediaStream());
+  //   newPeerConnection.ontrack = (event) => {
+  //     remoteStream.addTrack(event.track);
+  //   };
+  //   //add our local stream to the peer connection
+  //   if (connectedUserDetails.callType === "Video") {
+  //     for (const track of localStream.getTracks()) {
+  //       newPeerConnection.addTrack(track, localStream);
+  //     }
+  //     console.log("Local stream added to peer connection.");
+  //   }
+  // };
+  const createPeerConnection = () => {
+    console.log(" hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh");
+    const newPeerConnection = new RTCPeerConnection({
+      iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+    });
+
+    newPeerConnection.onicecandidate = async (event) => {
+      console.log("Getting ICE candidate from STUN server");
+      if (event.candidate) {
+        await socket.emit("ice-candidate", {
+          candidate: event.candidate,
+          socketId: connectedUserDetails.callerSocketId,
+        });
+      }
+    };
+
+    newPeerConnection.onconnectionstatechange = () => {
+      if (newPeerConnection.connectionState === "connected") {
+        console.log("Peer connection established successfully.");
+      }
+    };
+
+    const remoteStream = new MediaStream();
+    setRemoteStream(remoteStream);
+
+    newPeerConnection.ontrack = (event) => {
+      remoteStream.addTrack(event.track);
+    };
+
+    if (connectedUserDetails.callType === "Video" && localStream) {
+      for (const track of localStream.getTracks()) {
+        newPeerConnection.addTrack(track, localStream);
+      }
+    }
+
+    setPeerConnection(newPeerConnection); // Set it in state after configuration
+    return newPeerConnection;
+  };
+
+  // const sendWebRTCOffer = async () => {
+  //   console.log(" hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh");
+  //   const pc = await createPeerConnection();
+  //   setOffer(await pc.createOffer());
+  //   await pc.setLocalDescription(offer);
+  //   console.log(socket);
+
+  //   socket.emit("webRTC-signaling", {
+  //     connectedUserSocketId: connectedUserDetails.callerSocketId,
+  //     type: webRTCSignaling.OFFER,
+  //     offer: offer,
+  //   });
+  // };
+
+  const handleWebRTCOffer = async ({ connectedUserSocketId, type, offer }) => {
+    console.log(
+      "web rtc offer came from server calee   RUNNED handleWebRTCOffer FUNCTION",
+      connectedUserSocketId,
+      type,
+      offer
+    );
   };
 
   useEffect(() => {
@@ -166,21 +254,20 @@ function App() {
 
     socket.on("connect", () => {
       setSocket(socket);
-      console.log("successfully connected to wss server");
-      console.log(socket.id);
+      console.log("0 successfully connected to wss server");
       setSocketId(socket.id);
     });
     socket.on("pre-offer", (data) => {
       console.log("Received pre-offer:", data);
       const { callType, callerSocketId } = data;
-      console.log({ callType, callerSocketId });
+
       setConnectedUserDetails({ callType, callerSocketId });
-      if (callType === "not-found") {
-        setShowCallingDialog(false);
-        alert("The user you are trying to connect with is not found.");
-        setShowCallingDialog(false);
-      } else if (callType === "Chat" || callType === "Video") {
-        console.log(`Received ${callType} request from ${callerSocketId}`);
+      console.log(connectedUserDetails);
+      if (callType === "Chat" || callType === "Video") {
+        console.log(
+          "get call form caller , caller detail ",
+          connectedUserDetails
+        );
         setCallTypeDialog(callType);
         setShowIncomingCallDialog(true);
         // showIncomingCallDialog(callType, acceptCallHnadler, rejectCallHnadler);
@@ -188,21 +275,35 @@ function App() {
     });
     socket.on("pre-offer-answer", async (data) => {
       console.log("Received pre-offer answer:", data);
-      const { preOfferAnswer, callerSocketId } = data;
-      console.log({ preOfferAnswer, callerSocketId });
+      const { preOfferAnswer, calleeSocketId } = data;
+      // console.log({ preOfferAnswer, calleeSocketId });
       if (preOfferAnswer === "callee-not-found") {
         setShowCallingDialog(true);
         alert("The user you are trying tovvferg  connect with is not found.");
       } else if (preOfferAnswer === "ACCEPT") {
+        console.log(" hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh");
+
         setShowCallingDialog(false);
-        if (callTypeDialog === "Video") {
-          setSection("2");
-          await createPeerConnection();
-        } else if (callTypeDialog === "Chat") {
-          setSection("3");
-        }
-        console.log(callTypeDialog);
-        // want to diable the dashboard-container
+
+        // if (callTypeDialog === "Video") {
+        setSection("2");
+
+        getLocalPreview();
+
+        // sendWebRTCOffer();
+        const pc = await createPeerConnection();
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        console.log(
+          "calle id -------------------------------------------------------------------",
+          calleeSocketId
+        );
+        socket.emit("webRTC-signaling", {
+          connectedUserSocketId: calleeSocketId,
+          type: webRTCSignaling.OFFER,
+          offer: offer,
+        });
+
         setIsDashboardDisabled(true);
       } else if (preOfferAnswer === "REJECT") {
         alert(
@@ -216,30 +317,31 @@ function App() {
         );
       }
     });
-    socket.on("webRTC-signaling", (data) => {
-      switch (data.type) {
+    socket.on("webRTC-signaling", ({ connectedUserSocketId, type, offer }) => {
+      console.log(
+        "get webrtc signalling form caller ON CLLEEE SIDE ",
+        connectedUserSocketId,
+        type,
+        offer
+      );
+      switch (type) {
         case webRTCSignaling.OFFER:
-          handleWebRTCOffer(data);
+          handleWebRTCOffer({ connectedUserSocketId, type, offer });
           break;
         default:
           return;
       }
     });
-    navigator.mediaDevices
-      .getUserMedia({ video: true, audio: true })
-      .then((stream) => {
-        // Set the video source to the stream
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-        }
-      })
-      .catch((err) => {
-        console.error("Error accessing media devices.", err);
-      });
+
     return () => {
       socket.disconnect();
     };
   }, []);
+  useEffect(() => {
+    if (remoteVideoRef.current && remoteStream) {
+      remoteVideoRef.current.srcObject = remoteStream; // 🎯 Bind the stream to the video element
+    }
+  }, [remoteStream]);
 
   return (
     <div className="main-container flex min-h-screen">
@@ -338,10 +440,15 @@ function App() {
           {/* <div className="video-placeholder flex items-center justify-center">
             <img src="/logo.png" alt="video-placeholder" />
           </div> */}
-          <video className="remote-video" autoPlay id="remote-video"></video>
+          <video
+            ref={remoteVideoRef}
+            className="remote-video"
+            autoPlay
+            id="remote-video"
+          ></video>
           <div>
             <video
-              ref={videoRef}
+              ref={localVideoRef}
               autoPlay
               muted
               className="w-full h-full object-cover rounded-lg shadow-md"
